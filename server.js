@@ -1,25 +1,28 @@
-import express from 'express';
-import cors from 'cors';
-import dotenv from 'dotenv';
-import { createUserTableIfNotExists, checkUserTable } from './utils/dbCheck.js';
-
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import { createUserTableIfNotExists, checkUserTable } from "./utils/dbCheck.js";
+import pool from "./config/database.js"; // ✅ FIXED: imported pool at the top
+import authRoutes from "./routes/auth.js";
 
 dotenv.config();
 
 const app = express();
 
 // Middleware
-app.use(cors({
-  origin: ['http://localhost:3000', 'exp://172.20.10.6:*'],
-  credentials: true
-}));
+app.use(
+  cors({
+    origin: ["http://localhost:3000", "exp://172.20.10.5:*"],
+    credentials: true,
+  })
+);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Request logging middleware
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
-  next();
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+    next();
 });
 
 // Initialize database on startup
@@ -28,149 +31,146 @@ const initializeDatabase = async () => {
   await checkUserTable();
 };
 
-// Import routes
-import authRoutes from './routes/auth.js';
-
-
 // Routes
-app.use('/api/auth', authRoutes);
+app.use("/api/auth", authRoutes);
 
-app.get('/api/seat-reservation/start-locations', async (req, res, next) => {
+// ✅ FIXED: SEAT RESERVATION ROUTES
+app.get("/api/seat-reservation/start-locations", async (req, res) => {
   try {
-    const sql = 'SELECT DISTINCT start_point FROM routes ORDER BY start_point';
-    const [rows] = await pool.execute(sql);
-    // Map to a simple array of strings (frontend-friendly)
-    const locations = rows.map(r => r.start_point);
-    res.json({ success: true, data: locations });
-  } catch (error) {
-    console.error('Error fetching start locations:', error);
-    next(error);
-  }
-});
-
-app.get('/api/seat-reservation/end-locations', async (req, res, next) => {
-  try {
-    const startPoint = req.query.start_point || req.query.start || req.query.from;
-    if (!startPoint) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing required query parameter: start_point'
-      });
-    }
-
-    const sql = 'SELECT DISTINCT end_point FROM routes WHERE start_point = ? ORDER BY end_point';
-    const [rows] = await pool.execute(sql, [startPoint]);
-    const locations = rows.map(r => r.end_point);
-    res.json({ success: true, data: locations });
-  } catch (error) {
-    console.error('Error fetching end locations:', error);
-    next(error);
-  }
-});
-
-// Health check route with DB status
-app.get('/api/health', async (req, res) => {
-  try {
-    const pool = (await import('./config/database.js')).default;
-    const [rows] = await pool.execute('SELECT 1 as db_status');
+    const [rows] = await pool.query("SELECT DISTINCT start_point FROM routes");
+    // Extract just the start_point values into a string array
+    const startLocations = rows.map(row => row.start_point.trim());
     
-    res.status(200).json({ 
-      success: true,
-      message: 'CityLink API is running!',
-      database: 'Connected ✅',
-      timestamp: new Date().toISOString(),
-      environment: process.env.NODE_ENV
+    res.json({ 
+      success: true, 
+      startLocations: startLocations // Changed from 'data' to 'startLocations'
     });
   } catch (error) {
-    res.status(200).json({ 
+    console.error("Error fetching start locations:", error);
+    res.status(500).json({
+      success: false,
+      message: "Database error",
+      error: error.message,
+    });
+  }
+});
+
+app.get("/api/seat-reservation/end-locations", async (req, res) => {
+  try {
+    const [rows] = await pool.query("SELECT DISTINCT end_point FROM routes");
+    // Extract just the end_point values into a string array
+    const endLocations = rows.map(row => row.end_point.trim());
+    
+    res.json({ 
+      success: true, 
+      endLocations: endLocations // Changed from 'data' to 'endLocations'
+    });
+  } catch (error) {
+    console.error("Error fetching end locations:", error);
+    res.status(500).json({
+      success: false,
+      message: "Database error",
+      error: error.message,
+    });
+  }
+});
+
+// Health check route
+app.get("/api/health", async (req, res) => {
+  try {
+    const [rows] = await pool.execute("SELECT 1 as db_status");
+    res.status(200).json({
       success: true,
-      message: 'CityLink API is running!',
-      database: 'Disconnected ❌',
+      message: "CityLink API is running!",
+      database: "Connected ✅",
       timestamp: new Date().toISOString(),
       environment: process.env.NODE_ENV,
-      error: error.message
+    });
+  } catch (error) {
+    res.status(200).json({
+      success: true,
+      message: "CityLink API is running!",
+      database: "Disconnected ❌",
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV,
+      error: error.message,
     });
   }
 });
 
 // Database info route (for debugging)
-app.get('/api/db-info', async (req, res) => {
+app.get("/api/db-info", async (req, res) => {
   try {
-    const pool = (await import('./config/database.js')).default;
-    const [users] = await pool.execute('SELECT COUNT(*) as user_count FROM users');
-    const [tables] = await pool.execute('SHOW TABLES');
-    
+    const [users] = await pool.execute("SELECT COUNT(*) as user_count FROM users");
+    const [tables] = await pool.execute("SHOW TABLES");
     res.json({
       success: true,
       database: process.env.DB_NAME,
       user_count: users[0].user_count,
-      tables: tables.map(t => Object.values(t)[0]),
-      connection: 'Active'
+      tables: tables.map((t) => Object.values(t)[0]),
+      connection: "Active",
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Database connection failed',
-      error: error.message
+      message: "Database connection failed",
+      error: error.message,
     });
   }
 });
 
 // Root route
-app.get('/', (req, res) => {
+app.get("/", (req, res) => {
   res.json({
     success: true,
-    message: 'Welcome to CityLink Backend API',
-    version: '1.0.0',
-    database: 'FreeSQLDatabase.com',
+    message: "Welcome to CityLink Backend API",
+    version: "1.0.0",
+    database: "FreeSQLDatabase.com",
     endpoints: {
       auth: {
-        register: 'POST /api/auth/register',
-        login: 'POST /api/auth/login',
-        profile: 'GET /api/auth/me'
-      },
-      utility: {
-        health: 'GET /api/health',
-        db_info: 'GET /api/db-info'
+        register: "POST /api/auth/register",
+        login: "POST /api/auth/login",
+        profile: "GET /api/auth/me",
       },
       seat_reservation: {
-        start_locations: 'GET /api/seat-reservation/start-locations',
-        end_locations: 'GET /api/seat-reservation/end-locations?start_point=Galle'
-      }
-    }
+        start_locations: "GET /api/seat-reservation/start-locations",
+        end_locations: "GET /api/seat-reservation/end-locations?start_point=XYZ",
+      },
+      utility: {
+        health: "GET /api/health",
+        db_info: "GET /api/db-info",
+      },
+    },
   });
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Error Stack:', err.stack);
-  res.status(500).json({ 
+  console.error("Error Stack:", err.stack);
+  res.status(500).json({
     success: false,
-    message: 'Something went wrong!',
-    error: process.env.NODE_ENV === 'development' ? err.message : {}
+    message: "Something went wrong!",
+    error: process.env.NODE_ENV === "development" ? err.message : {},
   });
 });
 
-// 404 handler - FIXED: Use proper express 404 handler
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({
     success: false,
-    message: 'Route not found'
+    message: "404",
   });
 });
 
 const PORT = process.env.PORT || 5000;
 
-// Start server after DB initialization
 const startServer = async () => {
   await initializeDatabase();
-  
   app.listen(PORT, () => {
     console.log(`🚀 CityLink server running on port ${PORT}`);
     console.log(`🌐 Environment: ${process.env.NODE_ENV}`);
     console.log(`📊 Database: ${process.env.DB_NAME} @ ${process.env.DB_HOST}`);
     console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
-
   });
 };
 
