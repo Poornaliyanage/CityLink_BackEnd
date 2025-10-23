@@ -3,13 +3,14 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { createUserTableIfNotExists, checkUserTable } from './utils/dbCheck.js';
 
+
 dotenv.config();
 
 const app = express();
 
 // Middleware
 app.use(cors({
-  origin: ['http://localhost:3000', 'exp://172.20.10.5:*'],
+  origin: ['http://localhost:3000', 'exp://172.20.10.6:*'],
   credentials: true
 }));
 app.use(express.json());
@@ -30,8 +31,42 @@ const initializeDatabase = async () => {
 // Import routes
 import authRoutes from './routes/auth.js';
 
+
 // Routes
 app.use('/api/auth', authRoutes);
+
+app.get('/api/seat-reservation/start-locations', async (req, res, next) => {
+  try {
+    const sql = 'SELECT DISTINCT start_point FROM routes ORDER BY start_point';
+    const [rows] = await pool.execute(sql);
+    // Map to a simple array of strings (frontend-friendly)
+    const locations = rows.map(r => r.start_point);
+    res.json({ success: true, data: locations });
+  } catch (error) {
+    console.error('Error fetching start locations:', error);
+    next(error);
+  }
+});
+
+app.get('/api/seat-reservation/end-locations', async (req, res, next) => {
+  try {
+    const startPoint = req.query.start_point || req.query.start || req.query.from;
+    if (!startPoint) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required query parameter: start_point'
+      });
+    }
+
+    const sql = 'SELECT DISTINCT end_point FROM routes WHERE start_point = ? ORDER BY end_point';
+    const [rows] = await pool.execute(sql, [startPoint]);
+    const locations = rows.map(r => r.end_point);
+    res.json({ success: true, data: locations });
+  } catch (error) {
+    console.error('Error fetching end locations:', error);
+    next(error);
+  }
+});
 
 // Health check route with DB status
 app.get('/api/health', async (req, res) => {
@@ -97,6 +132,10 @@ app.get('/', (req, res) => {
       utility: {
         health: 'GET /api/health',
         db_info: 'GET /api/db-info'
+      },
+      seat_reservation: {
+        start_locations: 'GET /api/seat-reservation/start-locations',
+        end_locations: 'GET /api/seat-reservation/end-locations?start_point=Galle'
       }
     }
   });
@@ -131,6 +170,7 @@ const startServer = async () => {
     console.log(`🌐 Environment: ${process.env.NODE_ENV}`);
     console.log(`📊 Database: ${process.env.DB_NAME} @ ${process.env.DB_HOST}`);
     console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
+
   });
 };
 

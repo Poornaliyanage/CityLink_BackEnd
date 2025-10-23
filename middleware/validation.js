@@ -14,7 +14,7 @@ export const validateRegistration = [
 
     const errors = [];
 
-    // First name validation
+    // First name validation 
     if (!firstName || firstName.trim().length < 2 || firstName.trim().length > 50) {
       errors.push('First name must be between 2 and 50 characters');
     }
