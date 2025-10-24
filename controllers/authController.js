@@ -2,216 +2,301 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import pool from '../config/database.js';
 
-// Register new user
-export const register = async (req, res) => {
-  let connection;
-  try {
-    const {
-      firstName,
-      lastName,
-      email,
-      password,
-      nicPassport,
-      contactNumber,
-      role
-    } = req.body;
+// Base User class
+class User {
+  constructor(userData) {
+    this.user_id = userData.user_id;
+    this.name = userData.name;
+    this.email = userData.email;
+    this.role = userData.role;
+    this.phone_no = userData.phone_no;
+    this.nic = userData.NIC || userData.nic;
+    this.is_active = userData.is_active;
+    this.created_at = userData.created_at;
+    this.updated_at = userData.updated_at;
+  }
 
-    // Get connection from pool for transaction
-    connection = await pool.getConnection();
+  // Static method to create user from raw database data
+  static fromDatabase(dbData) {
+    return new User(dbData);
+  }
 
-    // Check if user already exists
-    const [existingUsers] = await connection.execute(
+  // Method to get safe user data (without sensitive information)
+  getSafeData() {
+    return {
+      user_id: this.user_id,
+      name: this.name,
+      email: this.email,
+      role: this.role,
+      phone_no: this.phone_no,
+      nic: this.nic,
+      is_active: this.is_active,
+      created_at: this.created_at,
+      updated_at: this.updated_at
+    };
+  }
+
+  // Method to get first name
+  getFirstName() {
+    return this.name.split(' ')[0];
+  }
+}
+
+// Authentication Service class
+class AuthService {
+  constructor() {
+    this.saltRounds = 12;
+  }
+
+  async hashPassword(password) {
+    return await bcrypt.hash(password, this.saltRounds);
+  }
+
+  async comparePassword(password, hashedPassword) {
+    return await bcrypt.compare(password, hashedPassword);
+  }
+
+  generateToken(userId) {
+    return jwt.sign(
+      { user_id: userId },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN }
+    );
+  }
+
+  verifyToken(token) {
+    return jwt.verify(token, process.env.JWT_SECRET);
+  }
+}
+
+// User Repository class for database operations
+class UserRepository {
+  constructor() {
+    this.pool = pool;
+  }
+
+  async getUserByEmailOrNIC(email, nicPassport) {
+    const [users] = await this.pool.execute(
       'SELECT user_id FROM users WHERE email = ? OR NIC = ?',
       [email, nicPassport]
     );
+    return users;
+  }
 
-    if (existingUsers.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'User already exists with this email or NIC/Passport'
-      });
-    }
+  async getUserByEmail(email) {
+    const [users] = await this.pool.execute(
+      `SELECT user_id, name, email, password, role, phone_no, NIC, is_active, created_at 
+       FROM users WHERE email = ? AND auth_type = 'email'`,
+      [email]
+    );
+    return users;
+  }
 
-    // Hash password
-    const saltRounds = 12;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
+  async getUserById(userId) {
+    const [users] = await this.pool.execute(
+      `SELECT user_id, name, email, role, phone_no, NIC, is_active, created_at, updated_at 
+       FROM users WHERE user_id = ?`,
+      [userId]
+    );
+    return users;
+  }
 
-    // Combine first and last name
-    const fullName = `${firstName} ${lastName}`;
-
-    // Insert user into database
-    const [result] = await connection.execute(
+  async createUser(userData) {
+    const { fullName, email, hashedPassword, nicPassport, contactNumber, role } = userData;
+    
+    const [result] = await this.pool.execute(
       `INSERT INTO users (name, email, password, NIC, phone_no, role, auth_type, is_active) 
        VALUES (?, ?, ?, ?, ?, ?, 'email', 1)`,
       [fullName, email, hashedPassword, nicPassport, contactNumber, role]
     );
 
-    // Generate JWT token
-    const token = jwt.sign(
-      { user_id: result.insertId },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN }
-    );
+    return result;
+  }
 
-    // Get created user data (excluding password)
-    const [users] = await connection.execute(
-      `SELECT user_id, name, email, role, phone_no, NIC, is_active, created_at 
-       FROM users WHERE user_id = ?`,
-      [result.insertId]
-    );
+  async getConnection() {
+    return await this.pool.getConnection();
+  }
+}
 
-    const user = users[0];
+// Main AuthController class
+class AuthController {
+  constructor() {
+    this.authService = new AuthService();
+    this.userRepository = new UserRepository();
+  }
 
-    res.status(201).json({
-      success: true,
-      message: `Welcome to CityLink, ${firstName}! Your ${role} account has been created successfully.`,
-      token,
-      user: {
-        user_id: user.user_id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        phone_no: user.phone_no,
-        nic: user.NIC,
-        is_active: user.is_active,
-        created_at: user.created_at
+  // Register new user
+  async register(req, res) {
+    let connection;
+    try {
+      const {
+        firstName,
+        lastName,
+        email,
+        password,
+        nicPassport,
+        contactNumber,
+        role
+      } = req.body;
+
+      // Get connection for transaction
+      connection = await this.userRepository.getConnection();
+
+      // Check if user already exists
+      const existingUsers = await this.userRepository.getUserByEmailOrNIC(email, nicPassport);
+      
+      if (existingUsers.length > 0) {
+        return this.sendErrorResponse(res, 400, 'User already exists with this email or NIC/Passport');
       }
-    });
 
-  } catch (error) {
-    console.error('Registration error:', error);
+      // Hash password
+      const hashedPassword = await this.authService.hashPassword(password);
+
+      // Combine first and last name
+      const fullName = `${firstName} ${lastName}`;
+
+      // Create user data object
+      const userData = {
+        fullName,
+        email,
+        hashedPassword,
+        nicPassport,
+        contactNumber,
+        role
+      };
+
+      // Insert user into database
+      const result = await this.userRepository.createUser(userData);
+
+      // Generate JWT token
+      const token = this.authService.generateToken(result.insertId);
+
+      // Get created user data
+      const [users] = await this.userRepository.getUserById(result.insertId);
+      const user = User.fromDatabase(users[0]);
+
+      this.sendSuccessResponse(res, 201, {
+        message: `Welcome to CityLink, ${user.getFirstName()}! Your ${role} account has been created successfully.`,
+        token,
+        user: user.getSafeData()
+      });
+
+    } catch (error) {
+      this.handleError(res, error, 'Registration error:');
+    } finally {
+      if (connection) {
+        connection.release();
+      }
+    }
+  }
+
+  // Login user
+  async login(req, res) {
+    try {
+      const { email, password } = req.body;
+
+      // Find user by email
+      const users = await this.userRepository.getUserByEmail(email);
+
+      if (users.length === 0) {
+        return this.sendErrorResponse(res, 400, 'Invalid email or password');
+      }
+
+      const dbUser = users[0];
+      const user = User.fromDatabase(dbUser);
+
+      // Check if user is active
+      if (!user.is_active) {
+        return this.sendErrorResponse(res, 400, 'Your account has been deactivated. Please contact support.');
+      }
+
+      // Verify password
+      const isPasswordValid = await this.authService.comparePassword(password, dbUser.password);
+      if (!isPasswordValid) {
+        return this.sendErrorResponse(res, 400, 'Invalid email or password');
+      }
+
+      // Generate JWT token
+      const token = this.authService.generateToken(user.user_id);
+
+      this.sendSuccessResponse(res, 200, {
+        message: `Welcome back, ${user.getFirstName()}!`,
+        token,
+        user: user.getSafeData()
+      });
+
+    } catch (error) {
+      this.handleError(res, error, 'Login error:');
+    }
+  }
+
+  // Get current user profile
+  async getProfile(req, res) {
+    try {
+      const users = await this.userRepository.getUserById(req.user.user_id);
+
+      if (users.length === 0) {
+        return this.sendErrorResponse(res, 404, 'User not found');
+      }
+
+      const user = User.fromDatabase(users[0]);
+
+      this.sendSuccessResponse(res, 200, {
+        user: user.getSafeData()
+      });
+
+    } catch (error) {
+      this.handleError(res, error, 'Get profile error:');
+    }
+  }
+
+  // Utility methods for response handling
+  sendSuccessResponse(res, statusCode, data) {
+    res.status(statusCode).json({
+      success: true,
+      ...data
+    });
+  }
+
+  sendErrorResponse(res, statusCode, message, error = null) {
+    const response = {
+      success: false,
+      message
+    };
+
+    if (error && process.env.NODE_ENV === 'development') {
+      response.error = error;
+    }
+
+    res.status(statusCode).json(response);
+  }
+
+  handleError(res, error, logMessage) {
+    console.error(logMessage, error);
     
     if (error.code === 'ER_DUP_ENTRY') {
-      return res.status(400).json({
-        success: false,
-        message: 'User already exists with this email or NIC'
-      });
+      return this.sendErrorResponse(res, 400, 'User already exists with this email or NIC');
     }
     
-    res.status(500).json({
-      success: false,
-      message: 'Server error during registration',
-      error: process.env.NODE_ENV === 'development' ? error.message : {}
-    });
-  } finally {
-    if (connection) {
-      connection.release();
-    }
-  }
-};
-
-// Login user
-export const login = async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    // Find user by email
-    const [users] = await pool.execute(
-      `SELECT user_id, name, email, password, role, phone_no, NIC, is_active, created_at 
-       FROM users WHERE email = ? AND auth_type = 'email'`,
-      [email]
+    this.sendErrorResponse(
+      res, 
+      500, 
+      'Server error during operation',
+      process.env.NODE_ENV === 'development' ? error.message : null
     );
-
-    if (users.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid email or password'
-      });
-    }
-
-    const user = users[0];
-
-    // Check if user is active
-    if (!user.is_active) {
-      return res.status(400).json({
-        success: false,
-        message: 'Your account has been deactivated. Please contact support.'
-      });
-    }
-
-    // Verify password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid email or password'
-      });
-    }
-
-    // Generate JWT token
-    const token = jwt.sign(
-      { user_id: user.user_id },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN }
-    );
-
-    res.json({
-      success: true,
-      message: `Welcome back, ${user.name.split(' ')[0]}!`,
-      token,
-      user: {
-        user_id: user.user_id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        phone_no: user.phone_no,
-        nic: user.NIC,
-        is_active: user.is_active,
-        created_at: user.created_at
-      }
-    });
-
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error during login',
-      error: process.env.NODE_ENV === 'development' ? error.message : {}
-    });
   }
-};
+}
 
-// Get current user profile
-export const getProfile = async (req, res) => {
-  try {
-    const [users] = await pool.execute(
-      `SELECT user_id, name, email, role, phone_no, NIC, is_active, created_at, updated_at 
-       FROM users WHERE user_id = ?`,
-      [req.user.user_id]
-    );
+// Create singleton instance
+const authController = new AuthController();
 
-    if (users.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
+// Export individual methods for use in routes
+export const register = (req, res) => authController.register(req, res);
+export const login = (req, res) => authController.login(req, res);
+export const getProfile = (req, res) => authController.getProfile(req, res);
 
-    const user = users[0];
-    
-    res.json({
-      success: true,
-      user: {
-        user_id: user.user_id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        phone_no: user.phone_no,
-        nic: user.NIC,
-        is_active: user.is_active,
-        created_at: user.created_at,
-        updated_at: user.updated_at
-      }
-    });
-
-  } catch (error) {
-    console.error('Get profile error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error while fetching profile'
-    });
-  }
-};
+// Export classes for testing and extension
+export { User, AuthService, UserRepository, AuthController };
 
 export default {
   register,

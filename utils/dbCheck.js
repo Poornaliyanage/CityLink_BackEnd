@@ -79,3 +79,108 @@ export const createUserTableIfNotExists = async () => {
     console.error('❌ Error with users table:', error.message);
   }
 };
+
+export const createRoutesTableIfNotExists = async () => {
+  try {
+    const [tables] = await pool.execute(`SHOW TABLES LIKE 'routes'`);
+    if (tables.length > 0) {
+      console.log("✅ Routes table already exists");
+      return;
+    }
+
+    const createTableSQL = `
+      CREATE TABLE routes (
+        route_id INT AUTO_INCREMENT PRIMARY KEY,
+        start_point VARCHAR(100) NOT NULL,
+        end_point VARCHAR(100) NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_route (start_point, end_point)
+      )
+    `;
+    await pool.execute(createTableSQL);
+    console.log("✅ Routes table created successfully");
+  } catch (error) {
+    console.error("❌ Error creating routes table:", error.message);
+  }
+};
+
+/* ---------------- BUSES TABLE ---------------- */
+export const checkBusesTable = async () => {
+  try {
+    const [rows] = await pool.execute(`
+      SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_NAME = 'buses' 
+      AND TABLE_SCHEMA = '${process.env.DB_NAME}'
+      ORDER BY ORDINAL_POSITION
+    `);
+    console.log("📋 Buses Table Structure:");
+    console.table(rows);
+    return rows;
+  } catch (error) {
+    console.error("❌ Error checking buses table:", error.message);
+    return null;
+  }
+};
+
+export const createBusesTableIfNotExists = async () => {
+  try {
+    const [tables] = await pool.execute(`SHOW TABLES LIKE 'buses'`);
+    if (tables.length > 0) {
+      console.log("✅ Buses table already exists");
+      return;
+    }
+
+    const createTableSQL = `
+      CREATE TABLE buses (
+        bus_id INT AUTO_INCREMENT PRIMARY KEY,
+        registration_number VARCHAR(20),
+        permit_link VARCHAR(255) NOT NULL,
+   
+        seat_count INT DEFAULT 0,
+        owner_id INT NOT NULL,
+        route_id INT NOT NULL,
+        service ENUM('N', 'L', 'S', 'XL') DEFAULT 'N',
+        
+        is_active TINYINT(1) DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_owner (owner_id),
+        INDEX idx_route (route_id)
+      )
+    `;
+
+    await pool.execute(createTableSQL);
+    console.log("✅ Buses table created successfully");
+  } catch (error) {
+    console.error("❌ Error with buses table:", error.message);
+  }
+};
+
+/* ---------------- CONDUCTOR_BUS TABLE ---------------- */
+export const createConductorBusTableIfNotExists = async () => {
+  try {
+    const [tables] = await pool.execute(`SHOW TABLES LIKE 'conductor_bus'`);
+    if (tables.length > 0) {
+      console.log("✅ Conductor_Bus table already exists");
+      return;
+    }
+
+    const createTableSQL = `
+      CREATE TABLE conductor_bus (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        conductor_id INT NOT NULL,
+        bus_id INT NOT NULL,
+        assigned_by INT NULL,
+        is_active TINYINT(1) DEFAULT 1,
+        assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_conductor (conductor_id),
+        INDEX idx_bus (bus_id)
+      )
+    `;
+    await pool.execute(createTableSQL);
+    console.log("✅ Conductor_Bus table created successfully");
+  } catch (error) {
+    console.error("❌ Error creating conductor_bus table:", error.message);
+  }
+};
